@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>テレプロンプター</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #000; color: #fff; }
+    button, textarea, input { font: inherit; }
+    button { cursor: pointer; }
+    .app { display: flex; flex-direction: column; min-height: 100dvh; background: #000; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px 18px; background: #171717; border-bottom: 1px solid #383838; }
+    .brand { margin: 0 12px 0 0; font-size: 17px; font-weight: 750; letter-spacing: .04em; }
+    .actions, .settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    button { min-height: 42px; padding: 8px 14px; border: 1px solid #666; border-radius: 8px; background: #292929; color: #fff; font-weight: 650; }
+    button:hover { background: #383838; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid #85c9ff; outline-offset: 2px; }
+    .primary { background: #fff; color: #000; border-color: #fff; }
+    .primary:hover { background: #dedede; }
+    .setting { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 14px; }
+    .setting output { min-width: 50px; color: #ddd; font-variant-numeric: tabular-nums; }
+    input[type="range"] { width: 125px; accent-color: #fff; cursor: pointer; }
+    .switch { display: flex; align-items: center; gap: 7px; padding: 8px 2px; white-space: nowrap; cursor: pointer; }
+    .switch input { width: 18px; height: 18px; accent-color: #fff; }
+    .status { margin: 0; padding: 8px 18px; min-height: 36px; color: #ccc; background: #101010; font-size: 13px; }
+    .workspace { display: grid; grid-template-columns: minmax(260px, 350px) minmax(0, 1fr); flex: 1; min-height: 0; }
+    .editor { display: flex; flex-direction: column; gap: 10px; padding: 18px; border-right: 1px solid #383838; background: #111; }
+    .editor label { font-weight: 700; }
+    .editor textarea { flex: 1; min-height: 240px; width: 100%; resize: none; padding: 13px; border: 1px solid #626262; border-radius: 8px; background: #070707; color: #fff; line-height: 1.65; }
+    .note { margin: 0; color: #aaa; font-size: 12px; line-height: 1.5; }
+    .stage { position: relative; overflow: hidden; min-height: 420px; background: #000; }
+    .script { position: absolute; top: 0; left: 0; width: 100%; padding: 0 clamp(24px, 5vw, 90px); color: #fff; font-weight: 700; line-height: 1.55; letter-spacing: .02em; white-space: pre-wrap; overflow-wrap: anywhere; will-change: transform; }
+    .empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: #777; text-align: center; font-size: 18px; pointer-events: none; }
+    .stage.has-script .empty { display: none; }
+    :fullscreen .app, .app:fullscreen { width: 100vw; height: 100dvh; }
+    @media (max-width: 800px) {
+      .workspace { grid-template-columns: 1fr; grid-template-rows: auto minmax(400px, 1fr); }
+      .editor { border-right: 0; border-bottom: 1px solid #383838; }
+      .editor textarea { flex: none; height: 160px; min-height: 160px; resize: vertical; }
+      .stage { min-height: 400px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app" id="app">
+    <div class="toolbar">
+      <h1 class="brand">テレプロンプター</h1>
+      <div class="actions" aria-label="再生操作">
+        <button class="primary" id="start" type="button">スタート</button>
+        <button id="pause" type="button">一時停止</button>
+        <button id="reset" type="button">先頭に戻す</button>
+      </div>
+      <div class="settings">
+        <label class="setting" for="speed">速度 <input id="speed" type="range" min="10" max="250" step="5" value="70"><output id="speedValue" for="speed">70 px/秒</output></label>
+        <label class="setting" for="fontSize">文字サイズ <input id="fontSize" type="range" min="28" max="100" step="2" value="56"><output id="fontValue" for="fontSize">56 px</output></label>
+        <label class="switch" for="mirror"><input id="mirror" type="checkbox">ミラー</label>
+        <button id="fullscreen" type="button">全画面表示</button>
+      </div>
+    </div>
+    <p class="status" id="status" role="status" aria-live="polite">原稿を入力して「スタート」を押してください。スペースキーでも再生・一時停止できます。</p>
+    <div class="workspace">
+      <section class="editor" aria-label="原稿入力">
+        <label for="source">原稿</label>
+        <textarea id="source" placeholder="ここに原稿を貼り付けてください" spellcheck="false"></textarea>
+        <p class="note">原稿はこのブラウザ内に保存されます。インターネットには送信しません。</p>
+      </section>
+      <section class="stage" id="stage" aria-label="原稿の表示領域">
+        <div class="script" id="script" aria-hidden="true"></div>
+        <div class="empty">入力した原稿がここに表示されます</div>
+      </section>
+    </div>
+  </main>
+  <script>
+    (() => {
+      'use strict';
+      const $ = (id) => document.getElementById(id);
+      const app = $('app');
+      const source = $('source');
+      const stage = $('stage');
+      const script = $('script');
+      const status = $('status');
+      const speed = $('speed');
+      const fontSize = $('fontSize');
+      const mirror = $('mirror');
+      const storageKey = 'teleprompter-script-v1';
+      let position = 0;
+      let running = false;
+      let frameId = 0;
+      let lastTime = 0;
+      let stageHeight = 0;
+
+      function setStatus(message) { status.textContent = message; }
+      function render() {
+        script.style.transform = `translateY(${position}px)${mirror.checked ? ' scaleX(-1)' : ''}`;
+      }
+      function resetPosition() {
+        stageHeight = stage.clientHeight;
+        position = stageHeight;
+        render();
+      }
+      function pause() {
+        running = false;
+        cancelAnimationFrame(frameId);
+        lastTime = 0;
+        setStatus('一時停止中。スタートまたはスペースキーで再開できます。');
+      }
+      function tick(time) {
+        if (!running) return;
+        if (lastTime) position -= Math.min((time - lastTime) / 1000, 0.1) * Number(speed.value);
+        lastTime = time;
+        render();
+        if (position < -script.offsetHeight) {
+          running = false;
+          lastTime = 0;
+          setStatus('最後まで表示しました。「先頭に戻す」で最初から再生できます。');
+          return;
+        }
+        frameId = requestAnimationFrame(tick);
+      }
+      function start() {
+        if (!source.value.trim()) {
+          setStatus('原稿を入力してください。');
+          source.focus();
+          return;
+        }
+        if (running) return;
+        if (position < -script.offsetHeight) resetPosition();
+        running = true;
+        lastTime = 0;
+        setStatus('再生中。スペースキーで一時停止できます。');
+        frameId = requestAnimationFrame(tick);
+      }
+      function updateScript() {
+        const wasAtStart = !running && position === stage.clientHeight;
+        script.textContent = source.value;
+        stage.classList.toggle('has-script', Boolean(source.value.trim()));
+        if (wasAtStart) resetPosition();
+        try { localStorage.setItem(storageKey, source.value); }
+        catch { setStatus('このブラウザでは保存できません。原稿を別の場所にも控えてください。'); }
+      }
+
+      try {
+        const saved = localStorage.getItem(storageKey);
+        if (saved !== null) source.value = saved;
+      } catch { setStatus('このブラウザでは保存できません。原稿を別の場所にも控えてください。'); }
+      script.textContent = source.value;
+      stage.classList.toggle('has-script', Boolean(source.value.trim()));
+      script.style.fontSize = fontSize.value + 'px';
+      requestAnimationFrame(resetPosition);
+
+      $('start').addEventListener('click', start);
+      $('pause').addEventListener('click', pause);
+      $('reset').addEventListener('click', () => {
+        running = false;
+        cancelAnimationFrame(frameId);
+        lastTime = 0;
+        resetPosition();
+        setStatus('先頭に戻しました。スタートで再生できます。');
+      });
+      source.addEventListener('input', updateScript);
+      speed.addEventListener('input', () => { $('speedValue').textContent = speed.value + ' px/秒'; });
+      fontSize.addEventListener('input', () => {
+        script.style.fontSize = fontSize.value + 'px';
+        $('fontValue').textContent = fontSize.value + ' px';
+      });
+      mirror.addEventListener('change', render);
+      $('fullscreen').addEventListener('click', async () => {
+        try {
+          if (document.fullscreenElement) await document.exitFullscreen();
+          else await app.requestFullscreen();
+        } catch { setStatus('このブラウザでは全画面表示を利用できません。'); }
+      });
+      document.addEventListener('fullscreenchange', () => {
+        $('fullscreen').textContent = document.fullscreenElement ? '全画面を終了' : '全画面表示';
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.code !== 'Space' || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
+        if (event.target.closest('textarea, input, [contenteditable="true"]')) return;
+        event.preventDefault();
+        if (running) pause(); else start();
+      });
+      document.addEventListener('visibilitychange', () => { if (document.hidden && running) pause(); });
+      window.addEventListener('resize', () => {
+        const atStart = !running && position === stageHeight;
+        stageHeight = stage.clientHeight;
+        if (atStart) resetPosition();
+      });
+    })();
+  </script>
+</body>
+</html>
